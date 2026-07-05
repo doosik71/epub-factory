@@ -27,11 +27,12 @@ import argparse
 import json
 import re
 import sys
-from html import escape
 from pathlib import Path
 
-import yaml
 from bs4 import BeautifulSoup
+
+import reflow
+from reflow import normalize_ws
 
 FS_RE = re.compile(r"^fs([0-9a-zA-Z]+)$")
 M_RE = re.compile(r"^m([0-9a-zA-Z]+)$")
@@ -41,23 +42,6 @@ Y_RE = re.compile(r"^y([0-9a-zA-Z]+)$")
 CSS_RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 SIMPLE_CLASS_SELECTOR_RE = re.compile(r"^\.([A-Za-z0-9_]+)$")
 MATRIX_SCALE_RE = re.compile(r"matrix\(\s*([-\d.]+)")
-
-ROW_MERGE_EPS = 1.5  # px: text fragments within this vertical distance are one visual row
-PAGE_NUMBER_LINE_RE = re.compile(r"^[\-‐-―\s]*\d{1,4}[\-‐-―\s]*$")
-BULLET_RE = re.compile(
-    r"^("
-    r"[\-–—○●□■◇◆▸▷▶‣•·ㅇ]"
-    r"|\(?[0-9]{1,3}[.\)]"
-    r"|[①-⑳]"
-    r"|[Ⅰ-Ⅹ]"
-    r"|[가-힣][.\)]"
-    r"|[IVXLCivxlc]{1,6}[.\)]"
-    r")(\s|$)"
-)
-
-HEADING_SIZE_RATIO = 1.05
-HEADING_LEVEL_TOLERANCE = 0.08
-MAX_HEADING_LEVEL = 6
 
 
 def strip_at_media_blocks(css_text):
@@ -133,10 +117,6 @@ def find_scale(classes, css):
     return 1.0
 
 
-def normalize_ws(text):
-    return re.sub(r"\s+", " ", text).strip()
-
-
 def extract_lines(soup, css):
     """Flatten every page's text into an ordered list of line records."""
     container = soup.find(id="page-container") or soup
@@ -170,21 +150,8 @@ def extract_lines(soup, css):
                         "text": text,
                     }
                 )
-        page_lines.sort(key=lambda l: (-l["bottom"], l["left"]))
-        lines.extend(merge_same_row(page_lines))
+        lines.extend(reflow.merge_same_row(page_lines))
     return lines
-
-
-def merge_same_row(page_lines):
-    """Merge text fragments that sit side by side on the same visual line."""
-    merged = []
-    for item in page_lines:
-        if merged and abs(merged[-1]["bottom"] - item["bottom"]) < ROW_MERGE_EPS:
-            merged[-1]["text"] = normalize_ws(merged[-1]["text"] + " " + item["text"])
-            merged[-1]["size"] = max(merged[-1]["size"], item["size"])
-        else:
-            merged.append(dict(item))
-    return merged
 
 
 def build_page_id_to_no(soup):
@@ -257,124 +224,6 @@ def extract_outline(soup, page_id_to_no):
     return chapters
 
 
-def assign_chapters(lines, chapters):
-    """Tag each line with the index of the last bookmark boundary it falls under."""
-    def row_key(page, y):
-        return (page, -y)
-
-    boundaries = [row_key(c["page"], c["y_target"]) for c in chapters]
-    assignments = [-1] * len(lines)
-    bi = 0
-    current = -1
-    for li, line in enumerate(lines):
-        line_row = row_key(line["page"], line["bottom"])
-        while bi < len(boundaries) and boundaries[bi] <= line_row:
-            current = bi
-            bi += 1
-        assignments[li] = current
-    return assignments
-
-
-def compute_body_size(lines):
-    weight = {}
-    for line in lines:
-        bucket = round(line["size"], 1)
-        weight[bucket] = weight.get(bucket, 0) + len(line["text"])
-    if not weight:
-        return 1.0
-    return max(weight, key=weight.get)
-
-
-def group_into_blocks(lines, body_size):
-    """Merge consecutive same-style lines into paragraph/heading blocks."""
-    blocks = []
-    current = None
-    for line in lines:
-        text = line["text"]
-        if PAGE_NUMBER_LINE_RE.match(text):
-            continue
-        size = line["size"]
-        is_heading = size > body_size * HEADING_SIZE_RATIO
-        starts_new = (
-            current is None
-            or is_heading != current["heading"]
-            or abs(size - current["size"]) > current["size"] * HEADING_LEVEL_TOLERANCE + 0.5
-            or BULLET_RE.match(text)
-        )
-        if starts_new:
-            if current:
-                blocks.append(current)
-            current = {"heading": is_heading, "size": size, "texts": [text]}
-        else:
-            current["texts"].append(text)
-    if current:
-        blocks.append(current)
-    return blocks
-
-
-def assign_heading_levels(chapter_blocks):
-    """Cluster heading font sizes (across the whole document) into h1..h6 levels."""
-    sizes = sorted(
-        {b["size"] for blocks in chapter_blocks for b in blocks if b["heading"]},
-        reverse=True,
-    )
-    clusters = []
-    for size in sizes:
-        if clusters and size >= clusters[-1][-1] * (1 - HEADING_LEVEL_TOLERANCE):
-            clusters[-1].append(size)
-        else:
-            clusters.append([size])
-    size_to_level = {}
-    for level, cluster in enumerate(clusters, start=1):
-        for size in cluster:
-            size_to_level[size] = min(level, MAX_HEADING_LEVEL)
-    return size_to_level
-
-
-def render_xhtml(title, blocks, size_to_level):
-    parts = [
-        '<?xml version="1.0" encoding="utf-8"?>',
-        "<!DOCTYPE html>",
-        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ko" lang="ko">',
-        "<head>",
-        '<meta charset="utf-8"/>',
-        f"<title>{escape(title, quote=False)}</title>",
-        "</head>",
-        "<body>",
-    ]
-    for block in blocks:
-        text = normalize_ws(" ".join(block["texts"]))
-        if not text:
-            continue
-        tag = f"h{size_to_level.get(block['size'], MAX_HEADING_LEVEL)}" if block["heading"] else "p"
-        parts.append(f"<{tag}>{escape(text, quote=False)}</{tag}>")
-    parts.append("</body>")
-    parts.append("</html>")
-    return "\n".join(parts)
-
-
-def slugify(title, max_len=40):
-    slug = re.sub(r'[\\/:*?"<>|]', "", title)
-    slug = re.sub(r"\s+", "_", slug).strip("_")
-    return slug[:max_len] or "chapter"
-
-
-def guess_title_author(chapter_blocks, input_stem):
-    """Best-effort metadata guess: the document's first two headings, in order,
-    are usually the title and then an author/organization/date line. There is
-    no real metadata in pdf2htmlEX output to confirm this, so callers should
-    treat the result as a draft to be corrected by hand."""
-    headings = [
-        normalize_ws(" ".join(block["texts"]))
-        for blocks in chapter_blocks
-        for block in blocks
-        if block["heading"]
-    ]
-    title = headings[0] if headings else re.sub(r"[+_]", " ", input_stem).strip()
-    author = headings[1] if len(headings) > 1 else ""
-    return title, author
-
-
 def convert(input_path):
     input_path = Path(input_path)
     output_dir = input_path.with_suffix("")
@@ -393,8 +242,8 @@ def convert(input_path):
         return 1
     print(f"[info] found {len(chapters)} bookmark entries")
 
-    assignments = assign_chapters(lines, chapters)
-    body_size = compute_body_size(lines)
+    assignments = reflow.assign_chapters(lines, chapters)
+    body_size = reflow.compute_body_size(lines)
     print(f"[info] detected body text size = {body_size}")
 
     lines_by_chapter = [[] for _ in chapters]
@@ -402,30 +251,11 @@ def convert(input_path):
         if chapter_idx >= 0:
             lines_by_chapter[chapter_idx].append(line)
 
-    chapter_blocks = [group_into_blocks(cl, body_size) for cl in lines_by_chapter]
-    size_to_level = assign_heading_levels(chapter_blocks)
+    chapter_blocks = [reflow.group_into_blocks(cl, body_size) for cl in lines_by_chapter]
+    size_to_level = reflow.assign_heading_levels(chapter_blocks)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    index = []
-    seq = 0
-    for chapter, blocks in zip(chapters, chapter_blocks):
-        if not blocks:
-            print(f"[skip] empty chapter: {chapter['title']!r}")
-            continue
-        seq += 1
-        out_name = f"{seq:03d}-{slugify(chapter['title'])}.xhtml"
-        xhtml = render_xhtml(chapter["title"], blocks, size_to_level)
-        (output_dir / out_name).write_text(xhtml, encoding="utf-8")
-        index.append({"level": chapter["level"], "label": chapter["title"], "file": out_name})
-
-    title, author = guess_title_author(chapter_blocks, input_path.stem)
-    index_doc = {"title": title, "author": author, "chapters": index}
-    index_path = output_dir / "index.yaml"
-    with index_path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(index_doc, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
-
-    print(f"[info] wrote {len(index)} XHTML file(s) and index.yaml to {output_dir}")
+    written = reflow.write_chapters(output_dir, chapters, chapter_blocks, size_to_level, input_path.stem)
+    print(f"[info] wrote {written} XHTML file(s) and index.yaml to {output_dir}")
     return 0
 
 

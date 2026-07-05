@@ -1,21 +1,26 @@
 # epub-factory
 
-`epub-factory`는 `pdf2htmlEX`로 PDF를 변환한 PDFHTML 파일을 EPUB 제작에 적합한 XHTML로 정제한 뒤, EPUB로 패키징하는 도구입니다.
+`epub-factory`는 PDF, 또는 `pdf2htmlEX`로 PDF를 변환한 PDFHTML 파일을 EPUB 제작에 적합한 XHTML로 정제한 뒤, EPUB로 패키징하는 도구입니다.
 
-PDFHTML은 원본 PDF의 시각적 배치를 그대로 재현하는 데 초점이 맞춰져 있어, 절대 좌표로 배치된 글자 단위 `<div>`, 페이지 전체 크기의 배경 래스터 이미지, 뷰어 전용 스크립트/스타일, 커닝 보정용 빈 `<span>` 등이 뒤섞여 있습니다. `epub-factory`는 이 노이즈를 제거하고 폰트 크기·글머리기호 등을 단서로 문단과 제목을 재구성(reflow)하여, EPUB 리더에서 자유롭게 리플로우되는 구조적 XHTML 문서를 만듭니다.
+PDFHTML은 원본 PDF의 시각적 배치를 그대로 재현하는 데 초점이 맞춰져 있어, 절대 좌표로 배치된 글자 단위 `<div>`, 페이지 전체 크기의 배경 래스터 이미지, 뷰어 전용 스크립트/스타일, 커닝 보정용 빈 `<span>` 등이 뒤섞여 있습니다. `epub-factory`는 이 노이즈를 제거하고 폰트 크기·글머리기호 등을 단서로 문단과 제목을 재구성(reflow)하여, EPUB 리더에서 자유롭게 리플로우되는 구조적 XHTML 문서를 만듭니다. 같은 리플로우 로직을 PDF 파일에도 직접 적용할 수 있어, `pdf2htmlEX` 없이 PDF 한 장으로도 변환할 수 있습니다.
 
 ## 파이프라인
 
 ```text
 input.html ──(1) pdfhtml2xhtml.py──▶ input/*.xhtml + input/index.yaml ──(2) xhtml2epub.py──▶ *.epub
+input.pdf  ──(1) pdf2xhtml.py─────▶ input/*.xhtml + input/index.yaml ──(2) xhtml2epub.py──▶ *.epub
                                                   ▲
                                      (사용자가 index.yaml을 직접 편집해
                                       목차 구조·제목·저자를 조정 가능)
 
 input.html ──────────────────── html2epub.py (위 두 단계를 한 번에 실행) ────────────────────▶ *.epub
+input.pdf  ──────────────────── pdf2epub.py  (위 두 단계를 한 번에 실행) ────────────────────▶ *.epub
 ```
 
-변환은 두 단계로 나뉘어 있습니다. 목차(챕터) 구성을 손볼 필요가 없다면 `html2epub.py`로 한 번에 처리하면 되고, 챕터를 합치거나 나누거나 목차 계층(레벨)·제목·저자를 조정하고 싶다면 `pdfhtml2xhtml.py`로 XHTML과 `index.yaml`을 먼저 만든 뒤 `index.yaml`을 손으로 고치고 `xhtml2epub.py`로 패키징합니다.
+변환은 입력 형식(HTML/PDF)과 목차 조정 필요 여부에 따라 스크립트를 고르면 됩니다.
+
+- **입력 형식**: 원본 PDF가 있다면 `pdf2xhtml`/`pdf2epub`을 권장합니다. `pdf2htmlEX`를 거치지 않고 PDF의 실제 텍스트·글자 크기·북마크를 직접 읽으므로 더 정확합니다 — `pdf2htmlEX`가 표지·구분 페이지 등에서 스타일이 입혀진 문구를 배경 이미지(그림)로 래스터화해 버리는 경우, `pdfhtml2xhtml`은 그 문구를 복원하지 못하지만 `pdf2xhtml`은 PDF 원본의 실제 글자를 그대로 읽어 옵니다(자세한 내용은 [알려진 한계](#알려진-한계) 참고). 이미 만들어진 `pdf2htmlEX` HTML만 있고 원본 PDF가 없을 때만 `pdfhtml2xhtml`/`html2epub`을 사용하세요.
+- **목차 조정 필요 여부**: 목차(챕터) 구성을 손볼 필요가 없다면 `html2epub.py`/`pdf2epub.py`로 한 번에 처리하면 되고, 챕터를 합치거나 나누거나 목차 계층(레벨)·제목·저자를 조정하고 싶다면 `pdfhtml2xhtml.py`/`pdf2xhtml.py`로 XHTML과 `index.yaml`을 먼저 만든 뒤 `index.yaml`을 손으로 고치고 `xhtml2epub.py`로 패키징합니다.
 
 ## 빠른 시작
 
@@ -23,21 +28,43 @@ input.html ──────────────────── html2epu
 
 ```powershell
 # 1. 한 번에 변환 (목차 구성을 바꿀 필요가 없는 경우)
+.\bin\pdf2epub.bat data\sample.pdf
+# pdf2htmlEX HTML만 있는 경우
 .\bin\html2epub.bat data\sample.html
 ```
 
 ```powershell
 # 2. 목차를 조정하고 싶은 경우: 두 단계로 실행
-.\bin\pdfhtml2xhtml.bat data\sample.html
+.\bin\pdf2xhtml.bat data\sample.pdf
 # data\sample\index.yaml 을 열어 level/label/file, title, author를 조정한다
 .\bin\xhtml2epub.bat data\sample\index.yaml
 ```
 
 ## 스크립트
 
+### `pdf2xhtml`
+
+PDF를 리플로우된 XHTML 챕터들로 분할합니다. `pdf2htmlEX` 설치가 필요 없습니다.
+
+```text
+bin\pdf2xhtml.bat <input.pdf>
+```
+
+- 입력 `<dir>/<stem>.pdf` 기준으로 `<dir>/<stem>/` 폴더를 만들어 그 안에 결과를 씁니다.
+- PDF 북마크(목차) 항목 하나당 XHTML 파일 하나(`001-<slug>.xhtml`, `002-<slug>.xhtml`, ...)를 생성합니다. 북마크 순서를 그대로 따르므로, 북마크가 평평한 목록이면 결과도 평평합니다.
+- 같은 폴더에 `index.yaml`을 함께 생성합니다.
+- 처리 과정:
+  1. `pdfplumber`로 각 페이지의 단어 단위 위치(x/y)와 글자 크기를 읽습니다.
+  2. 같은 줄에 걸친 단어를 하나로 합치고, 페이지 읽기 순서(위→아래, 왼쪽→오른쪽)로 정렬합니다.
+  3. 문서 전체에서 가장 많이 쓰인 글자 크기를 본문 크기로 간주하고, 그보다 큰 크기 또는 글머리기호(○, -, (01번), ①…)로 시작하는 줄을 새 블록의 시작으로 판단해 문단/제목 블록으로 묶습니다.
+  4. 제목 블록들을 크기별로 군집화해 `<h1>`~`<h6>` 레벨을 배정합니다.
+  5. `pypdf`로 읽은 북마크의 페이지+좌표를 기준으로 각 줄을 해당 북마크(챕터)에 배정합니다.
+  6. 페이지 번호만 있는 줄(`- 6 -` 등)은 버립니다.
+- 3~4번 문단/제목 판별 로직은 `pdfhtml2xhtml`과 `scripts/reflow.py`를 공유합니다. PDF의 실제 텍스트를 직접 읽으므로, `pdf2htmlEX`가 배경 이미지로 래스터화해버리는 스타일드 문구도 그대로 복원됩니다 — [알려진 한계](#알려진-한계) 참고.
+
 ### `pdfhtml2xhtml`
 
-pdf2htmlEX HTML을 리플로우된 XHTML 챕터들로 분할합니다.
+`pdf2htmlEX` HTML을 리플로우된 XHTML 챕터들로 분할합니다. 이미 `pdf2htmlEX`로 변환된 HTML만 있고 원본 PDF가 없을 때 사용하세요(있다면 `pdf2xhtml`을 권장).
 
 ```text
 bin\pdfhtml2xhtml.bat <input.html>
@@ -57,7 +84,7 @@ bin\pdfhtml2xhtml.bat <input.html>
 
 ### `xhtml2epub`
 
-`index.yaml`을 읽어 EPUB로 패키징합니다.
+`index.yaml`을 읽어 EPUB로 패키징합니다. `pdf2xhtml`과 `pdfhtml2xhtml` 중 어느 쪽이 만든 `index.yaml`이든 동일하게 동작합니다.
 
 ```text
 bin\xhtml2epub.bat <index.yaml> [-o OUTPUT_DIR]
@@ -68,22 +95,25 @@ bin\xhtml2epub.bat <index.yaml> [-o OUTPUT_DIR]
 - `-o`를 생략하면 `index.yaml`과 같은 폴더에 저장하고, 지정하면 그 폴더(없으면 새로 생성)에 저장합니다.
 - 파일명은 `"<title> by <author>.epub"`이며, `title`/`author`가 비어 있으면 각각 `"unknown"`으로 대체합니다.
 
-### `html2epub`
+### `pdf2epub`, `html2epub`
 
-위 두 스크립트를 이어 붙인 편의 스크립트입니다.
+각각 `pdf2xhtml`+`xhtml2epub`, `pdfhtml2xhtml`+`xhtml2epub`을 이어 붙인 편의 스크립트입니다.
 
 ```text
+bin\pdf2epub.bat <input.pdf> [-o OUTPUT_DIR]
 bin\html2epub.bat <input.html> [-o OUTPUT_DIR]
 ```
 
-- XHTML/`index.yaml` 생성 경로는 `pdfhtml2xhtml`의 규칙을 그대로 따릅니다(`<dir>/<stem>/`).
-- EPUB 저장 경로는 `-o`를 생략하면 **입력 HTML 파일이 있는 폴더**가 기본값입니다(`xhtml2epub`를 단독 실행할 때의 기본값인 `index.yaml` 폴더와 다릅니다).
+- XHTML/`index.yaml` 생성 경로는 각각 `pdf2xhtml`/`pdfhtml2xhtml`의 규칙을 그대로 따릅니다(`<dir>/<stem>/`).
+- EPUB 저장 경로는 `-o`를 생략하면 **입력 파일이 있는 폴더**가 기본값입니다(`xhtml2epub`를 단독 실행할 때의 기본값인 `index.yaml` 폴더와 다릅니다).
 
 각 `.bat`은 프로젝트의 `.venv` 파이썬으로 `scripts\` 아래의 동일한 이름의 `.py` 스크립트를 실행하는 얇은 래퍼이며, 실행 위치(현재 작업 폴더)와 무관하게 항상 올바른 가상환경과 스크립트를 찾습니다. `python`을 직접 호출하거나 가상환경을 활성화할 필요가 없습니다.
 
+(`scripts/reflow.py`는 CLI로 실행하는 스크립트가 아니라, `pdf2xhtml`/`pdfhtml2xhtml`이 공유하는 문단/제목 판별·XHTML 렌더링·`index.yaml` 작성 로직을 모아 둔 내부 모듈입니다.)
+
 ## `index.yaml` 형식
 
-`pdfhtml2xhtml.py`가 생성하고 `xhtml2epub.py`가 읽는 중간 산출물로, EPUB의 제목·저자·목차 구조를 사람이 직접 조정할 수 있게 하기 위한 파일입니다.
+`pdf2xhtml.py`/`pdfhtml2xhtml.py`가 생성하고 `xhtml2epub.py`가 읽는 중간 산출물로, EPUB의 제목·저자·목차 구조를 사람이 직접 조정할 수 있게 하기 위한 파일입니다.
 
 ```yaml
 title: 제목
@@ -104,8 +134,8 @@ chapters:
 
 ## 알려진 한계
 
-- **배경 이미지에 그려진 텍스트는 복원 불가**: 이 문서는 표지·챕터 구분 페이지 등에서 "AI" 같은 문구를 일반 텍스트가 아니라 그래픽(로고체 효과가 들어간 그림)으로 그려 넣은 경우가 있습니다. pdf2htmlEX는 이런 요소를 배경 PNG에 래스터화하고, 진짜 선택 가능한 글자만 HTML 텍스트로 남깁니다. `epub-factory`는 배경 이미지를 통째로 버리므로, 그 안에 있던 문구는 결과 XHTML에서 사라집니다(예: `전략분야AI 고속도로 구축` → `전략분야 고속도로 구축`).
-- **북마크가 평평하면 목차도 평평합니다**: PDF 북마크 트리에 실제 중첩(하위 `<ul>`)이 없으면 `level`이 대부분 같은 값으로 채워집니다. 항목 순서가 북마크 자체의 순서를 그대로 따르므로, 원본 PDF의 북마크가 뒤섞여 있으면(예: 부록 각주 번호가 뒤죽박죽인 경우) 챕터 순서도 그대로 뒤섞입니다. `index.yaml`을 손으로 정리해서 바로잡아야 합니다.
+- **`pdfhtml2xhtml`은 배경 이미지에 그려진 텍스트를 복원하지 못함**: pdf2htmlEX로 변환된 문서는 표지·챕터 구분 페이지 등에서 "AI" 같은 문구를 일반 텍스트가 아니라 그래픽(로고체 효과가 들어간 그림)으로 그려 넣은 경우가 있습니다. pdf2htmlEX는 이런 요소를 배경 PNG에 래스터화하고, 진짜 선택 가능한 글자만 HTML 텍스트로 남기는데, `pdfhtml2xhtml`은 배경 이미지를 통째로 버리므로 그 안에 있던 문구는 결과 XHTML에서 사라집니다(예: `전략분야AI 고속도로 구축` → `전략분야 고속도로 구축`). **`pdf2xhtml`은 이 한계가 없습니다** — PDF의 실제 텍스트를 직접 읽으므로 같은 문구가 온전히 복원됩니다. 원본 PDF가 있다면 `pdf2xhtml`을 쓰는 것이 이런 손실을 피하는 가장 확실한 방법입니다.
+- **북마크가 평평하면 목차도 평평합니다**: PDF 북마크 트리에 실제 중첩이 없으면 `level`이 대부분 같은 값으로 채워집니다. 항목 순서가 북마크 자체의 순서를 그대로 따르므로, 원본 PDF의 북마크가 뒤섞여 있으면(예: 부록 각주 번호가 뒤죽박죽인 경우) 챕터 순서도 그대로 뒤섞입니다. `index.yaml`을 손으로 정리해서 바로잡아야 합니다.
 - **문단/제목 구분은 휴리스틱**: 글자 크기·글머리기호 패턴에 의존하는 근사치이므로, 디자인이 복잡한 페이지(다단 배치, 표 등)에서는 문장이 부자연스럽게 합쳐지거나 나뉠 수 있습니다.
 - **표·이미지·다단 레이아웃은 지원하지 않음**: 결과는 순수 텍스트(`<h1>`~`<h6>`, `<p>`)만 포함합니다.
 
@@ -119,10 +149,11 @@ uv sync
 
 주요 의존성(`pyproject.toml` 참고):
 
-- `beautifulsoup4`, `lxml`: HTML 파싱
+- `beautifulsoup4`, `lxml`: pdf2htmlEX HTML 파싱 (`pdfhtml2xhtml`)
+- `pdfplumber`, `pypdf`: PDF에서 직접 텍스트 위치·글자 크기·북마크 추출 (`pdf2xhtml`)
 - `pyyaml`: `index.yaml` 읽기/쓰기
 
-세 스크립트는 `bin\`의 배치 파일로 실행하는 것이 기본이지만(위 [스크립트](#스크립트) 참고), 다른 파이썬 코드를 임시로 시험해 보고 싶다면 프로젝트 루트의 `python.cmd`로 가상환경 Python을 바로 실행할 수 있습니다.
+각 스크립트는 `bin\`의 배치 파일로 실행하는 것이 기본이지만(위 [스크립트](#스크립트) 참고), 다른 파이썬 코드를 임시로 시험해 보고 싶다면 프로젝트 루트의 `python.cmd`로 가상환경 Python을 바로 실행할 수 있습니다.
 
 ```powershell
 .\python.cmd scripts\html2epub.py data\sample.html
@@ -133,14 +164,19 @@ uv sync
 ```text
 .
 ├── bin/
+│   ├── pdf2xhtml.bat        # scripts\pdf2xhtml.py 실행 래퍼
 │   ├── pdfhtml2xhtml.bat    # scripts\pdfhtml2xhtml.py 실행 래퍼
 │   ├── xhtml2epub.bat       # scripts\xhtml2epub.py 실행 래퍼
+│   ├── pdf2epub.bat         # scripts\pdf2epub.py 실행 래퍼
 │   └── html2epub.bat        # scripts\html2epub.py 실행 래퍼
-├── data/                    # 입력 HTML 및 변환 결과 (git 추적 제외)
+├── data/                    # 입력 PDF/HTML 및 변환 결과 (git 추적 제외)
 ├── scripts/
-│   ├── pdfhtml2xhtml.py     # HTML → XHTML 챕터 + index.yaml
+│   ├── reflow.py            # pdf2xhtml/pdfhtml2xhtml이 공유하는 리플로우 로직
+│   ├── pdf2xhtml.py         # PDF → XHTML 챕터 + index.yaml
+│   ├── pdfhtml2xhtml.py     # pdf2htmlEX HTML → XHTML 챕터 + index.yaml
 │   ├── xhtml2epub.py        # index.yaml → EPUB
-│   └── html2epub.py         # 위 두 단계를 한 번에 실행
+│   ├── pdf2epub.py          # pdf2xhtml + xhtml2epub을 한 번에 실행
+│   └── html2epub.py         # pdfhtml2xhtml + xhtml2epub을 한 번에 실행
 ├── main.py
 ├── pyproject.toml
 └── README.md
